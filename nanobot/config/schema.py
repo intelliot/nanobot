@@ -200,6 +200,13 @@ class MatrixConfig(Base):
     group_allow_from: list[str] = Field(default_factory=list)
     allow_room_mentions: bool = False
 
+class AuthConfig(Base):
+    """Auth profile configuration for OpenClaw compatibility."""
+
+    profiles_path: str | None = None  # Path to auth-profiles.json
+    profile: str | None = None  # Profile ID (e.g. "openai-codex:default")
+
+
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -326,6 +333,7 @@ class Config(BaseSettings):
     """Root configuration for nanobot."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)

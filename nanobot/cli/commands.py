@@ -210,7 +210,7 @@ def _make_provider(config: Config):
 
     # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        return OpenAICodexProvider(default_model=model)
+        return OpenAICodexProvider(default_model=model, auth_config=config.auth)
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
     if provider_name == "custom":

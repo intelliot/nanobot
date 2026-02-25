@@ -19,9 +19,26 @@ DEFAULT_ORIGINATOR = "nanobot"
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex", auth_config=None):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
+        self._auth_config = auth_config
+
+    async def _get_token(self):
+        """Get OAuth token: auth-profiles.json first, then oauth_cli_kit fallback."""
+        if self._auth_config and self._auth_config.profiles_path and self._auth_config.profile:
+            from nanobot.providers.auth_profiles import load_profile, check_token_expiry
+
+            token = load_profile(self._auth_config.profiles_path, self._auth_config.profile)
+            if token is not None:
+                if not check_token_expiry(token):
+                    raise RuntimeError(
+                        f"Auth profile '{self._auth_config.profile}' token is expired. "
+                        "Please refresh it in OpenClaw."
+                    )
+                return token
+
+        return await asyncio.to_thread(get_codex_token)
 
     async def chat(
         self,
@@ -35,7 +52,7 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
-        token = await asyncio.to_thread(get_codex_token)
+        token = await self._get_token()
         headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {
