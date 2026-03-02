@@ -103,3 +103,29 @@ def test_valid_token_not_expired():
 def test_zero_expires_always_valid():
     token = AuthProfileToken(access="a", refresh="r", expires=0, account_id="x")
     assert check_token_expiry(token) is True
+
+
+def test_malformed_expires_returns_none(tmp_path):
+    path = _write_profiles(tmp_path, {
+        "openai-codex:default": {
+            "type": "oauth",
+            "access": "a",
+            "refresh": "r",
+            "expires": "not-a-number",
+            "accountId": "x",
+        }
+    })
+    assert load_profile(path, "openai-codex:default") is None
+
+
+def test_negative_expires_returns_none(tmp_path):
+    path = _write_profiles(tmp_path, {
+        "openai-codex:default": {
+            "type": "oauth",
+            "access": "a",
+            "refresh": "r",
+            "expires": -1,
+            "accountId": "x",
+        }
+    })
+    assert load_profile(path, "openai-codex:default") is None
