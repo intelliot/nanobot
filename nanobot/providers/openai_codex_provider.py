@@ -8,7 +8,6 @@ import json
 from typing import Any, AsyncGenerator
 
 import httpx
-from loguru import logger
 
 from oauth_cli_kit import get_token as get_codex_token
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -20,9 +19,38 @@ DEFAULT_ORIGINATOR = "nanobot"
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex", auth_config=None):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
+        self._auth_config = auth_config
+
+    async def _get_token(self):
+        """Get OAuth token: auth-profiles.json first, then oauth_cli_kit fallback."""
+        profiles_path = (getattr(self._auth_config, "profiles_path", None) or "").strip()
+        profile_id = (getattr(self._auth_config, "profile", None) or "").strip()
+        has_profile_config = bool(profiles_path or profile_id)
+
+        if has_profile_config:
+            if not (profiles_path and profile_id):
+                raise RuntimeError(
+                    "Auth profile config is incomplete: set both auth.profilesPath and auth.profile."
+                )
+            from nanobot.providers.auth_profiles import load_profile, check_token_expiry
+
+            token = load_profile(profiles_path, profile_id)
+            if token is None:
+                raise RuntimeError(
+                    f"Failed to load auth profile '{profile_id}' from '{profiles_path}'. "
+                    "Check auth.profilesPath/auth.profile and refresh credentials in OpenClaw."
+                )
+            if not check_token_expiry(token):
+                raise RuntimeError(
+                    f"Auth profile '{profile_id}' token is expired. "
+                    "Please refresh it in OpenClaw."
+                )
+            return token
+
+        return await asyncio.to_thread(get_codex_token)
 
     async def chat(
         self,
@@ -34,9 +62,6 @@ class OpenAICodexProvider(LLMProvider):
     ) -> LLMResponse:
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
-
-        token = await asyncio.to_thread(get_codex_token)
-        headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -57,19 +82,23 @@ class OpenAICodexProvider(LLMProvider):
         url = DEFAULT_CODEX_URL
 
         try:
-            try:
-                content, tool_calls, finish_reason = await _request_codex(url, headers, body, verify=True)
-            except Exception as e:
-                if "CERTIFICATE_VERIFY_FAILED" not in str(e):
-                    raise
-                logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
-                content, tool_calls, finish_reason = await _request_codex(url, headers, body, verify=False)
+            token = await self._get_token()
+            headers = _build_headers(token.account_id, token.access)
+            content, tool_calls, finish_reason = await _request_codex(url, headers, body)
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
             )
         except Exception as e:
+            if "CERTIFICATE_VERIFY_FAILED" in str(e):
+                return LLMResponse(
+                    content=(
+                        "Error calling Codex: SSL certificate verification failed. "
+                        "TLS verification is required; fix your local CA/certificate chain and retry."
+                    ),
+                    finish_reason="error",
+                )
             return LLMResponse(
                 content=f"Error calling Codex: {str(e)}",
                 finish_reason="error",
@@ -101,9 +130,8 @@ async def _request_codex(
     url: str,
     headers: dict[str, str],
     body: dict[str, Any],
-    verify: bool,
 ) -> tuple[str, list[ToolCallRequest], str]:
-    async with httpx.AsyncClient(timeout=60.0, verify=verify) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()
