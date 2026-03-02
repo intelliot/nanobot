@@ -26,17 +26,29 @@ class OpenAICodexProvider(LLMProvider):
 
     async def _get_token(self):
         """Get OAuth token: auth-profiles.json first, then oauth_cli_kit fallback."""
-        if self._auth_config and self._auth_config.profiles_path and self._auth_config.profile:
+        profiles_path = (getattr(self._auth_config, "profiles_path", None) or "").strip()
+        profile_id = (getattr(self._auth_config, "profile", None) or "").strip()
+        has_profile_config = bool(profiles_path or profile_id)
+
+        if has_profile_config:
+            if not (profiles_path and profile_id):
+                raise RuntimeError(
+                    "Auth profile config is incomplete: set both auth.profilesPath and auth.profile."
+                )
             from nanobot.providers.auth_profiles import load_profile, check_token_expiry
 
-            token = load_profile(self._auth_config.profiles_path, self._auth_config.profile)
-            if token is not None:
-                if not check_token_expiry(token):
-                    raise RuntimeError(
-                        f"Auth profile '{self._auth_config.profile}' token is expired. "
-                        "Please refresh it in OpenClaw."
-                    )
-                return token
+            token = load_profile(profiles_path, profile_id)
+            if token is None:
+                raise RuntimeError(
+                    f"Failed to load auth profile '{profile_id}' from '{profiles_path}'. "
+                    "Check auth.profilesPath/auth.profile and refresh credentials in OpenClaw."
+                )
+            if not check_token_expiry(token):
+                raise RuntimeError(
+                    f"Auth profile '{profile_id}' token is expired. "
+                    "Please refresh it in OpenClaw."
+                )
+            return token
 
         return await asyncio.to_thread(get_codex_token)
 
@@ -50,9 +62,6 @@ class OpenAICodexProvider(LLMProvider):
     ) -> LLMResponse:
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
-
-        token = await self._get_token()
-        headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -73,6 +82,8 @@ class OpenAICodexProvider(LLMProvider):
         url = DEFAULT_CODEX_URL
 
         try:
+            token = await self._get_token()
+            headers = _build_headers(token.account_id, token.access)
             content, tool_calls, finish_reason = await _request_codex(url, headers, body)
             return LLMResponse(
                 content=content,

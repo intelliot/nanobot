@@ -20,6 +20,17 @@ class AuthProfileToken:
     account_id: str
 
 
+def _read_required_str(profile: dict, *keys: str) -> str | None:
+    """Return the first non-empty string value for keys."""
+    for key in keys:
+        value = profile.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                return value
+    return None
+
+
 def load_profile(profiles_path: str, profile_id: str) -> AuthProfileToken | None:
     """Load a specific OAuth profile from an auth-profiles.json file.
 
@@ -46,19 +57,34 @@ def load_profile(profiles_path: str, profile_id: str) -> AuthProfileToken | None
         logger.warning(f"Profile '{profile_id}' is type '{profile.get('type')}', expected 'oauth'")
         return None
 
-    access = profile.get("access")
-    refresh = profile.get("refresh")
-    account_id = profile.get("accountId") or profile.get("account_id")
-    expires = profile.get("expires")
+    access = _read_required_str(profile, "access")
+    refresh = _read_required_str(profile, "refresh")
+    account_id = _read_required_str(profile, "accountId", "account_id")
 
     if not (access and refresh and account_id):
         logger.warning(f"Profile '{profile_id}' missing required fields (access/refresh/accountId)")
         return None
 
+    expires_raw = profile.get("expires")
+    if expires_raw in (None, ""):
+        expires = 0
+    else:
+        if isinstance(expires_raw, bool):
+            logger.warning(f"Profile '{profile_id}' has invalid 'expires' value: {expires_raw!r}")
+            return None
+        try:
+            expires = int(expires_raw)
+        except (TypeError, ValueError):
+            logger.warning(f"Profile '{profile_id}' has invalid 'expires' value: {expires_raw!r}")
+            return None
+        if expires < 0:
+            logger.warning(f"Profile '{profile_id}' has negative 'expires' value: {expires}")
+            return None
+
     return AuthProfileToken(
         access=access,
         refresh=refresh,
-        expires=int(expires) if expires else 0,
+        expires=expires,
         account_id=account_id,
     )
 
